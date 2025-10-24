@@ -1,0 +1,128 @@
+# Model Configuration for Hybrid ETA System
+# Based on the algorithms provided
+
+# MST-AV Configuration
+mst_av:
+  grid_size: 50  # meters
+  
+# GDRN-DFT Configuration
+gdrn_dft:
+  delta_g: 7  # days - time duration to train
+  delta_t: 15  # minutes - time step duration
+  tau_f: 2  # forward diffusion parameter
+  tau_b: 2  # backward diffusion parameter
+  d_g: 16  # LSTM hidden dimension
+  epsilon_g: 0.1  # cutoff amplitude to ignore low patterns
+  num_epochs: 100
+  learning_rate: 0.001
+  
+# KNN (Koopman Neural Network) Configuration
+knn:
+  d_k: 5  # number of time steps
+  D_k: 12  # dimension of lifted space
+  delta_k: 5  # minutes - sampling interval
+  p: 64  # encoder first layer
+  q: 32  # encoder second layer
+  p_prime: 32  # decoder first layer
+  q_prime: 64  # decoder second layer
+  lambda_k: 0.5  # regularization between prediction and reconstruction
+  V_max: 80  # km/h - maximum speed
+  epsilon: 0.1  # minimum speed threshold
+  num_epochs: 200
+  learning_rate: 0.001
+  batch_size: 32
+  
+# FE-NN (Feature-Encoded Neural Network) Configuration
+fenn:
+  k: 7  # sequence length
+  delta_n: 10  # minutes - time step length
+  b: 6  # sinusoidal feature dimension
+  l_f: 3  # number of hidden layers
+  hidden_dims: [128, 64, 32]  # hidden layer dimensions
+  V_max: 80  # km/h
+  epsilon: 0.1
+  num_epochs: 150
+  learning_rate: 0.001
+  batch_size: 32
+  
+# MGCN (Masked Graph Convolutional Network) Configuration
+mgcn:
+  delta_Tm: 7  # days - history length
+  delta_m: 10  # minutes - sampling interval
+  L_m: 3  # number of GCN layers
+  hidden_dims: [64, 32, 16]
+  lambda_m: 0.1  # regularization parameter
+  num_epochs: 150
+  learning_rate: 0.001
+  batch_size: 16
+  
+# Hybrid Model Configuration
+hybrid:
+  n_m: 2  # number of top models to combine
+  b: 6  # sinusoidal features for time
+  hidden_dims: [128, 64, 32, 16]
+  num_epochs: 100
+  learning_rate: 0.001
+  batch_size: 32
+  smoothing: true
+  
+# Benchmark Models Configuration
+benchmarks:
+  dcrnn:
+    num_layers: 2
+    hidden_dim: 64
+    learning_rate: 0.001
+    
+  stgcn:
+    num_layers: 2
+    temporal_kernel: 3
+    spatial_kernel: 3
+    learning_rate: 0.001
+    
+  gwnet:
+    num_layers: 8
+    dilation_channels: 32
+    learning_rate: 0.001
+    
+  tgcn:
+    hidden_dim: 64
+    learning_rate: 0.001
+    
+  mtgnn:
+    num_layers: 3
+    hidden_dim: 32
+    learning_rate: 0.001
+    
+  stfgnn:
+    num_layers: 2
+    hidden_dim: 64
+    learning_rate: 0.001
+    
+  st_resnet:
+    num_residual_units: 12
+    learning_rate: 0.001
+    
+  st_gconv:
+    num_layers: 2
+    chebyshev_k: 3
+    learning_rate: 0.001
+
+# Training Configuration
+training:
+  validation_split: 0.2
+  early_stopping_patience: 10
+  checkpoint_frequency: 10  # epochs
+  use_gpu: true
+  num_workers: 4
+  
+# Evaluation Configuration
+evaluation:
+  eta_ranges: ['0-10', '10-25', '25-45', '45+']
+  metrics: ['MAE', 'MAPE', 'RMSE']
+  
+# Data Configuration
+data:
+  grid_size: 50  # meters
+  weather_sample_rate: 10  # fetch weather every N GPS records
+  max_speed_threshold: 100  # km/h
+  min_speed_threshold: 0.1  # km/h
