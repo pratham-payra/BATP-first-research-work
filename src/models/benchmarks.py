@@ -281,6 +281,344 @@ class TGCN(nn.Module):
         return pred
 
 
+# ==================== MTGNN ====================
+
+class GraphLearningLayer(nn.Module):
+    """Graph structure learning layer"""
+    def __init__(self, num_nodes: int, k: int = 10):
+        super().__init__()
+        self.node_embeddings1 = nn.Parameter(torch.randn(num_nodes, k))
+        self.node_embeddings2 = nn.Parameter(torch.randn(k, num_nodes))
+    
+    def forward(self):
+        """Learn adjacency matrix"""
+        adj = torch.softmax(
+            torch.relu(torch.matmul(self.node_embeddings1, self.node_embeddings2)),
+            dim=1
+        )
+        return adj
+
+
+class MixPropLayer(nn.Module):
+    """Mix-hop propagation layer"""
+    def __init__(self, in_channels: int, out_channels: int, num_hops: int = 2):
+        super().__init__()
+        self.num_hops = num_hops
+        self.weights = nn.ModuleList([
+            nn.Linear(in_channels, out_channels) for _ in range(num_hops + 1)
+        ])
+    
+    def forward(self, x, adj):
+        """
+        Args:
+            x: (batch, num_nodes, in_channels)
+            adj: (num_nodes, num_nodes)
+        """
+        out = self.weights[0](x)
+        
+        for k in range(1, self.num_hops + 1):
+            x = torch.matmul(adj, x)
+            out += self.weights[k](x)
+        
+        return out
+
+
+class MTGNN(nn.Module):
+    """Multivariate Time Series Graph Neural Network"""
+    def __init__(self, num_nodes: int, hidden_dim: int = 32, num_layers: int = 3):
+        super().__init__()
+        self.num_nodes = num_nodes
+        
+        # Graph learning
+        self.graph_learning = GraphLearningLayer(num_nodes)
+        
+        # Mix-hop propagation layers
+        self.mix_prop_layers = nn.ModuleList([
+            MixPropLayer(hidden_dim if i > 0 else 1, hidden_dim)
+            for i in range(num_layers)
+        ])
+        
+        # Temporal convolution
+        self.temporal_conv = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1)
+        
+        self.fc = nn.Linear(hidden_dim, 1)
+    
+    def forward(self, x, adj=None):
+        """
+        Args:
+            x: (batch, seq_len, num_nodes, 1)
+            adj: Optional adjacency matrix
+        """
+        batch_size, seq_len, num_nodes, _ = x.shape
+        
+        # Learn graph structure
+        learned_adj = self.graph_learning()
+        if adj is not None:
+            # Combine learned and given adjacency
+            adj = 0.5 * adj + 0.5 * learned_adj
+        else:
+            adj = learned_adj
+        
+        # Process each time step
+        outputs = []
+        for t in range(seq_len):
+            x_t = x[:, t, :, :]  # (batch, num_nodes, 1)
+            
+            # Apply mix-hop propagation
+            for layer in self.mix_prop_layers:
+                x_t = torch.relu(layer(x_t, adj))
+            
+            outputs.append(x_t)
+        
+        # Stack temporal outputs
+        outputs = torch.stack(outputs, dim=1)  # (batch, seq_len, num_nodes, hidden_dim)
+        
+        # Temporal convolution
+        outputs = outputs.permute(0, 3, 2, 1)  # (batch, hidden_dim, num_nodes, seq_len)
+        outputs = outputs.reshape(batch_size * hidden_dim, num_nodes, seq_len)
+        outputs = self.temporal_conv(outputs)
+        outputs = outputs.reshape(batch_size, hidden_dim, num_nodes, seq_len)
+        
+        # Take last time step
+        outputs = outputs[:, :, :, -1]  # (batch, hidden_dim, num_nodes)
+        outputs = outputs.permute(0, 2, 1)  # (batch, num_nodes, hidden_dim)
+        
+        # Predict
+        pred = self.fc(outputs)
+        return pred
+
+
+# ==================== STFGNN ====================
+
+class SpatioTemporalFusionLayer(nn.Module):
+    """Spatio-temporal fusion layer"""
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.spatial_conv = nn.Linear(in_channels, out_channels)
+        self.temporal_conv = nn.Conv1d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.fusion = nn.Linear(out_channels * 2, out_channels)
+    
+    def forward(self, x, adj):
+        """
+        Args:
+            x: (batch, seq_len, num_nodes, in_channels)
+            adj: (num_nodes, num_nodes)
+        """
+        batch_size, seq_len, num_nodes, in_channels = x.shape
+        
+        # Spatial processing
+        spatial_out = []
+        for t in range(seq_len):
+            x_t = x[:, t, :, :]  # (batch, num_nodes, in_channels)
+            # Graph convolution
+            x_t = torch.matmul(adj, x_t)
+            x_t = self.spatial_conv(x_t)
+            spatial_out.append(x_t)
+        spatial_out = torch.stack(spatial_out, dim=1)  # (batch, seq_len, num_nodes, out_channels)
+        
+        # Temporal processing
+        x_temp = x.permute(0, 2, 3, 1)  # (batch, num_nodes, in_channels, seq_len)
+        x_temp = x_temp.reshape(batch_size * num_nodes, in_channels, seq_len)
+        temporal_out = self.temporal_conv(x_temp)
+        temporal_out = temporal_out.reshape(batch_size, num_nodes, -1, seq_len)
+        temporal_out = temporal_out.permute(0, 3, 1, 2)  # (batch, seq_len, num_nodes, out_channels)
+        
+        # Fusion
+        fused = torch.cat([spatial_out, temporal_out], dim=-1)
+        output = torch.relu(self.fusion(fused))
+        
+        return output
+
+
+class STFGNN(nn.Module):
+    """Spatio-Temporal Fusion Graph Neural Network"""
+    def __init__(self, num_nodes: int, hidden_dim: int = 64, num_layers: int = 3):
+        super().__init__()
+        self.num_nodes = num_nodes
+        
+        # ST fusion layers
+        self.st_layers = nn.ModuleList([
+            SpatioTemporalFusionLayer(hidden_dim if i > 0 else 1, hidden_dim)
+            for i in range(num_layers)
+        ])
+        
+        self.fc = nn.Linear(hidden_dim, 1)
+    
+    def forward(self, x, adj):
+        """
+        Args:
+            x: (batch, seq_len, num_nodes, 1)
+            adj: (num_nodes, num_nodes)
+        """
+        # Apply ST fusion layers
+        for layer in self.st_layers:
+            x = layer(x, adj)
+        
+        # Take last time step
+        x = x[:, -1, :, :]  # (batch, num_nodes, hidden_dim)
+        
+        # Predict
+        pred = self.fc(x)
+        return pred
+
+
+# ==================== ST-ResNet ====================
+
+class ResidualUnit(nn.Module):
+    """Residual unit for ST-ResNet"""
+    def __init__(self, channels: int):
+        super().__init__()
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(channels)
+    
+    def forward(self, x):
+        residual = x
+        out = torch.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += residual
+        out = torch.relu(out)
+        return out
+
+
+class STResNet(nn.Module):
+    """Spatio-Temporal Residual Network"""
+    def __init__(self, num_nodes: int, num_residual_units: int = 4):
+        super().__init__()
+        self.num_nodes = num_nodes
+        
+        # Input convolution
+        self.input_conv = nn.Conv2d(1, 64, kernel_size=3, padding=1)
+        
+        # Residual units
+        self.residual_units = nn.ModuleList([
+            ResidualUnit(64) for _ in range(num_residual_units)
+        ])
+        
+        # Output convolution
+        self.output_conv = nn.Conv2d(64, 1, kernel_size=3, padding=1)
+    
+    def forward(self, x, adj=None):
+        """
+        Args:
+            x: (batch, seq_len, num_nodes, 1)
+            adj: Optional adjacency matrix (not used in ST-ResNet)
+        """
+        # Reshape to image-like format
+        x = x.permute(0, 3, 1, 2)  # (batch, 1, seq_len, num_nodes)
+        
+        # Input convolution
+        x = torch.relu(self.input_conv(x))
+        
+        # Apply residual units
+        for unit in self.residual_units:
+            x = unit(x)
+        
+        # Output convolution
+        x = self.output_conv(x)
+        
+        # Take last time step and reshape
+        x = x[:, :, -1, :]  # (batch, 1, num_nodes)
+        x = x.permute(0, 2, 1)  # (batch, num_nodes, 1)
+        
+        return x
+
+
+# ==================== ST-GConv ====================
+
+class STGConvBlock(nn.Module):
+    """Spatio-temporal graph convolution block"""
+    def __init__(self, in_channels: int, out_channels: int, K: int = 3):
+        super().__init__()
+        self.K = K
+        
+        # Spatial convolution weights
+        self.spatial_weights = nn.Parameter(torch.FloatTensor(in_channels, out_channels, K))
+        nn.init.xavier_uniform_(self.spatial_weights)
+        
+        # Temporal convolution
+        self.temporal_conv = nn.Conv1d(out_channels, out_channels, kernel_size=3, padding=1)
+        
+        # Batch normalization
+        self.bn = nn.BatchNorm1d(out_channels)
+    
+    def forward(self, x, adj):
+        """
+        Args:
+            x: (batch, seq_len, num_nodes, in_channels)
+            adj: (num_nodes, num_nodes)
+        """
+        batch_size, seq_len, num_nodes, in_channels = x.shape
+        
+        # Spatial convolution for each time step
+        spatial_out = []
+        for t in range(seq_len):
+            x_t = x[:, t, :, :]  # (batch, num_nodes, in_channels)
+            
+            # Compute Chebyshev polynomials
+            cheb = []
+            for k in range(self.K):
+                if k == 0:
+                    cheb.append(torch.eye(num_nodes).to(x.device))
+                elif k == 1:
+                    cheb.append(adj)
+                else:
+                    cheb.append(2 * torch.matmul(adj, cheb[-1]) - cheb[-2])
+            
+            # Apply spatial convolution
+            out_t = torch.zeros(batch_size, num_nodes, self.spatial_weights.shape[1]).to(x.device)
+            for k in range(self.K):
+                x_k = torch.matmul(cheb[k], x_t)
+                out_t += torch.matmul(x_k, self.spatial_weights[:, :, k])
+            
+            spatial_out.append(out_t)
+        
+        spatial_out = torch.stack(spatial_out, dim=1)  # (batch, seq_len, num_nodes, out_channels)
+        
+        # Temporal convolution
+        spatial_out = spatial_out.permute(0, 2, 3, 1)  # (batch, num_nodes, out_channels, seq_len)
+        spatial_out = spatial_out.reshape(batch_size * num_nodes, -1, seq_len)
+        temporal_out = self.temporal_conv(spatial_out)
+        temporal_out = torch.relu(self.bn(temporal_out))
+        temporal_out = temporal_out.reshape(batch_size, num_nodes, -1, seq_len)
+        temporal_out = temporal_out.permute(0, 3, 1, 2)  # (batch, seq_len, num_nodes, out_channels)
+        
+        return temporal_out
+
+
+class STGConv(nn.Module):
+    """Spatio-Temporal Graph Convolution Network"""
+    def __init__(self, num_nodes: int, hidden_dim: int = 64, num_layers: int = 3):
+        super().__init__()
+        self.num_nodes = num_nodes
+        
+        # ST-GConv blocks
+        self.st_blocks = nn.ModuleList([
+            STGConvBlock(hidden_dim if i > 0 else 1, hidden_dim)
+            for i in range(num_layers)
+        ])
+        
+        self.fc = nn.Linear(hidden_dim, 1)
+    
+    def forward(self, x, adj):
+        """
+        Args:
+            x: (batch, seq_len, num_nodes, 1)
+            adj: (num_nodes, num_nodes)
+        """
+        # Apply ST-GConv blocks
+        for block in self.st_blocks:
+            x = block(x, adj)
+        
+        # Take last time step
+        x = x[:, -1, :, :]  # (batch, num_nodes, hidden_dim)
+        
+        # Predict
+        pred = self.fc(x)
+        return pred
+
+
 # ==================== Benchmark Model Wrapper ====================
 
 class BenchmarkModel:
@@ -341,9 +679,31 @@ class BenchmarkModel:
                 self.num_nodes,
                 hidden_dim=self.config.get('hidden_dim', 64)
             )
+        elif self.model_type == 'mtgnn':
+            self.model = MTGNN(
+                self.num_nodes,
+                hidden_dim=self.config.get('hidden_dim', 32),
+                num_layers=self.config.get('num_layers', 3)
+            )
+        elif self.model_type == 'stfgnn':
+            self.model = STFGNN(
+                self.num_nodes,
+                hidden_dim=self.config.get('hidden_dim', 64),
+                num_layers=self.config.get('num_layers', 3)
+            )
+        elif self.model_type == 'st_resnet':
+            self.model = STResNet(
+                self.num_nodes,
+                num_residual_units=self.config.get('num_residual_units', 4)
+            )
+        elif self.model_type == 'st_gconv':
+            self.model = STGConv(
+                self.num_nodes,
+                hidden_dim=self.config.get('hidden_dim', 64),
+                num_layers=self.config.get('num_layers', 3)
+            )
         else:
-            # Placeholder for other models
-            self.model = DCRNN(self.num_nodes)
+            raise ValueError(f"Unknown benchmark model type: {self.model_type}")
         
         # Prepare training data
         speed_sequences, _ = self._prepare_sequences(gps_data, node_list)
