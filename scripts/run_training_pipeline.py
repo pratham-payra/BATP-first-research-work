@@ -66,6 +66,13 @@ def main():
         'mst_av', 'gdrn_dft', 'knn', 'fenn', 'mgcn', 'hybrid'
     ]
     
+    # Check if benchmarks should be trained
+    if 'benchmarks' in models_to_train or 'all_benchmarks' in models_to_train:
+        models_to_train.remove('benchmarks' if 'benchmarks' in models_to_train else 'all_benchmarks')
+        train_benchmarks_flag = True
+    else:
+        train_benchmarks_flag = False
+    
     trained_models = {}
     
     for model_name in models_to_train:
@@ -102,10 +109,32 @@ def main():
                 model = train_hybrid(preprocessed_data, args.route, trained_models)
                 trained_models['hybrid'] = model
             
+            # Support individual benchmark models
+            elif model_name in ['dcrnn', 'stgcn', 'gwnet', 'tgcn', 'mtgnn', 'stfgnn', 'st_resnet', 'st_gconv']:
+                from src.training.train_benchmarks import train_single_benchmark
+                model = train_single_benchmark(preprocessed_data, args.route, model_name)
+                trained_models[model_name] = model
+            
             print(f"✓ {model_name.upper()} training complete")
             
         except Exception as e:
             print(f"✗ Error training {model_name}: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    # Train all benchmark models if requested
+    if train_benchmarks_flag:
+        print("\n" + "="*80)
+        print("TRAINING BENCHMARK MODELS")
+        print("="*80)
+        
+        try:
+            from src.training.train_benchmarks import train_benchmarks
+            benchmark_models = train_benchmarks(preprocessed_data, args.route)
+            trained_models.update(benchmark_models)
+            print(f"\n✓ Trained {len(benchmark_models)} benchmark models")
+        except Exception as e:
+            print(f"✗ Error training benchmarks: {e}")
             import traceback
             traceback.print_exc()
     

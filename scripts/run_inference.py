@@ -17,7 +17,7 @@ def main():
     parser.add_argument('--route', type=str, default='route1',
                        help='Route identifier (default: route1)')
     parser.add_argument('--model', type=str, default='hybrid',
-                       help='Model to use (mst_av, gdrn_dft, knn, fenn, mgcn, hybrid)')
+                       help='Model to use (mst_av, gdrn_dft, knn, fenn, mgcn, hybrid, dcrnn, stgcn, gwnet, tgcn, mtgnn, stfgnn, st_resnet, st_gconv)')
     parser.add_argument('--bus-location', type=str, required=True,
                        help='Current bus location as "lat,lon"')
     parser.add_argument('--stop-location', type=str, required=True,

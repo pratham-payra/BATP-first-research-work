@@ -57,6 +57,14 @@ def main():
         'mst_av', 'gdrn_dft', 'knn', 'fenn', 'mgcn', 'hybrid'
     ]
     
+    # Add benchmark models if requested
+    if 'benchmarks' in models_to_eval or 'all_benchmarks' in models_to_eval:
+        if 'benchmarks' in models_to_eval:
+            models_to_eval.remove('benchmarks')
+        if 'all_benchmarks' in models_to_eval:
+            models_to_eval.remove('all_benchmarks')
+        models_to_eval.extend(['dcrnn', 'stgcn', 'gwnet', 'tgcn', 'mtgnn', 'stfgnn', 'st_resnet', 'st_gconv'])
+    
     loaded_models = {}
     
     for model_name in models_to_eval:
@@ -71,9 +79,23 @@ def main():
                 model.graph = graph
                 model.node_attrs = node_attrs
                 loaded_models['mst_av'] = model
-                
-            # Add other model loading logic here
-            # For now, we'll just load MST-AV as an example
+            
+            # Load benchmark models
+            elif model_name in ['dcrnn', 'stgcn', 'gwnet', 'tgcn', 'mtgnn', 'stfgnn', 'st_resnet', 'st_gconv']:
+                from src.models.benchmarks import BenchmarkModel
+                model_params = s3_manager.load_model(BenchmarkModel, f'benchmark_{model_name}', args.route)
+                # Reconstruct model from params
+                config = model_params.get('config', {})
+                model = BenchmarkModel(model_name, config)
+                model.num_nodes = model_params.get('num_nodes')
+                model.node_list = model_params.get('node_list')
+                model.adj_norm = model_params.get('adj_norm')
+                # Load model state if available
+                if model_params.get('model_state'):
+                    model.model.load_state_dict(model_params['model_state'])
+                loaded_models[model_name] = model
+            
+            # Add other primary model loading logic as needed
             
             print(f"✓ {model_name} loaded successfully")
             
